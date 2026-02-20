@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import *
@@ -9,7 +10,7 @@ from aiogram.fsm.context import FSMContext
 from db import *
 from admin import register_admin_handlers
 
-TOKEN = "7709082743:AAGtPsOFAZbZED9OOjrPpQzNdT2_kcZKibE"
+TOKEN = os.getenv("7709082743:AAGtPsOFAZbZED9OOjrPpQzNdT2_kcZKibE")
 
 logging.basicConfig(level=logging.INFO)
 
