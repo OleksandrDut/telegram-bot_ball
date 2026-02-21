@@ -4,11 +4,14 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 
 from db import *
-import aiosqlite
 import asyncio
 
-ADMIN_USERNAMES = ["danabila07",
-    "Dutka_O", "Kuznitsov_V"]
+
+ADMIN_USERNAMES = [
+    "danabila07",
+    "Dutka_O",
+    "Kuznitsov_V"
+]
 
 
 def is_admin(user):
@@ -43,12 +46,9 @@ def register_admin_handlers(dp: Dispatcher):
         if not is_admin(m.from_user):
             return
 
-        async with aiosqlite.connect("dating.db") as db:
-            cur = await db.execute("SELECT COUNT(*) FROM profiles")
-            users = (await cur.fetchone())[0]
-
-            cur = await db.execute("SELECT COUNT(*) FROM bans")
-            bans = (await cur.fetchone())[0]
+        async with pool.acquire() as conn:
+            users = await conn.fetchval("SELECT COUNT(*) FROM profiles")
+            bans = await conn.fetchval("SELECT COUNT(*) FROM bans")
 
         matches = await get_matches_count()
 
@@ -58,7 +58,7 @@ def register_admin_handlers(dp: Dispatcher):
             f"🚫 Заблоковано: {bans}"
         )
 
-    # ---------- МОДЕРАЦІЯ (ПОКАЗАТИ ВСІ ПІДРЯД) ----------
+    # ---------- МОДЕРАЦІЯ ----------
     @dp.message(F.text == "🔍 Модерація анкет")
     async def mod(m: Message):
         if not is_admin(m.from_user):
@@ -73,40 +73,36 @@ def register_admin_handlers(dp: Dispatcher):
 
         for i, p in enumerate(profiles, start=1):
 
-            username_text = f"@{p[7]}" if p[7] else "Немає username"
+            username_text = f"@{p['username']}" if p["username"] else "Немає username"
 
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(
                         text="🗑 Видалити",
-                        callback_data=f"del_{p[0]}"
+                        callback_data=f"del_{p['user_id']}"
                     ),
                     InlineKeyboardButton(
                         text="🚫 Бан",
-                        callback_data=f"ban_{p[0]}"
+                        callback_data=f"ban_{p['user_id']}"
                     )
                 ]
             ])
 
             text = (
                 f"#{i}\n"
-                f"{p[1]}, {p[2]}\n"
-                f"{p[4]} см\n"
-                f"{p[5]}\n\n"
+                f"{p['name']}, {p['age']}\n"
+                f"{p['height']} см\n"
+                f"{p['bio']}\n\n"
                 f"Username: {username_text}"
             )
 
             await m.answer_photo(
-                p[6],
+                p["photo"],
                 caption=text,
                 reply_markup=kb
             )
 
-            # Якщо анкет багато — ставимо паузу
-            if len(profiles) > 100:
-                await asyncio.sleep(0.4)
-            else:
-                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.1)
 
     # ---------- ВИДАЛЕННЯ ----------
     @dp.callback_query(F.data.startswith("del_"))
@@ -165,3 +161,4 @@ def register_admin_handlers(dp: Dispatcher):
             await m.answer("🚫 Користувача заблоковано")
 
         await state.clear()
+
