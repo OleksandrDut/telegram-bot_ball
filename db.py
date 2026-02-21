@@ -1,163 +1,164 @@
-import asyncpg
-import os
-import random
+from aiogram import F, Dispatcher
+from aiogram.types import *
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.context import FSMContext
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-pool = None
-
-
-# ---------- INIT ----------
-
-async def init_db():
-    global pool
-    pool = await asyncpg.create_pool(DATABASE_URL)
-
-    async with pool.acquire() as conn:
-
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS profiles(
-            user_id BIGINT PRIMARY KEY,
-            name TEXT,
-            age TEXT,
-            gender TEXT,
-            height TEXT,
-            bio TEXT,
-            photo TEXT,
-            username TEXT
-        )
-        """)
-
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS likes(
-            from_id BIGINT,
-            to_id BIGINT,
-            PRIMARY KEY (from_id, to_id)
-        )
-        """)
-
-        await conn.execute("""
-        CREATE TABLE IF NOT EXISTS bans(
-            user_id BIGINT PRIMARY KEY,
-            reason TEXT
-        )
-        """)
+from db import *
+import asyncio
 
 
-# ---------- ПРОФІЛІ ----------
-
-async def save_profile(data):
-    async with pool.acquire() as conn:
-        await conn.execute("""
-        INSERT INTO profiles VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        ON CONFLICT (user_id) DO UPDATE SET
-        name=$2, age=$3, gender=$4,
-        height=$5, bio=$6, photo=$7, username=$8
-        """, *data)
+ADMIN_USERNAMES = [
+    "danabila07",
+    "Dutka_O",
+    "Kuznitsov_V"
+]
 
 
-async def get_profile(uid):
-    async with pool.acquire() as conn:
-        return await conn.fetchrow(
-            "SELECT * FROM profiles WHERE user_id=$1",
-            uid
+def is_admin(user):
+    return user.username in ADMIN_USERNAMES
+
+
+class AdminForm(StatesGroup):
+    comment = State()
+
+
+def register_admin_handlers(dp: Dispatcher):
+
+    # ---------- МЕНЮ ----------
+    @dp.message(F.text == "/admin")
+    async def admin_menu(m: Message):
+        if not is_admin(m.from_user):
+            return
+
+        kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="🔍 Модерація анкет")],
+                [KeyboardButton(text="📊 Статистика")]
+            ],
+            resize_keyboard=True
         )
 
+        await m.answer("👮 Адмін панель", reply_markup=kb)
 
-async def get_all_profiles():
-    async with pool.acquire() as conn:
-        return await conn.fetch(
-            "SELECT * FROM profiles"
+    # ---------- СТАТИСТИКА ----------
+    @dp.message(F.text == "📊 Статистика")
+    async def stats(m: Message):
+        if not is_admin(m.from_user):
+            return
+
+        async with pool.acquire() as conn:
+            users = await conn.fetchval("SELECT COUNT(*) FROM profiles")
+            bans = await conn.fetchval("SELECT COUNT(*) FROM bans")
+
+        matches = await get_matches_count()
+
+        await m.answer(
+            f"👥 Анкет: {users}\n"
+            f"❤️ Матчів: {matches}\n"
+            f"🚫 Заблоковано: {bans}"
         )
 
+    # ---------- МОДЕРАЦІЯ ----------
+    @dp.message(F.text == "🔍 Модерація анкет")
+    async def mod(m: Message):
+        if not is_admin(m.from_user):
+            return
 
-async def delete_profile(uid):
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM profiles WHERE user_id=$1",
-            uid
-        )
+        profiles = await get_all_profiles()
 
-        await conn.execute(
-            "DELETE FROM likes WHERE from_id=$1 OR to_id=$1",
-            uid
-        )
+        if not profiles:
+            return await m.answer("Анкет нема")
 
-        await conn.execute(
-            "DELETE FROM bans WHERE user_id=$1",
-            uid
-        )
+        await m.answer(f"Знайдено анкет: {len(profiles)}\nПоказую всі ↓")
 
+        for i, p in enumerate(profiles, start=1):
 
-# ---------- ПОШУК ----------
+            username_text = f"@{p['username']}" if p["username"] else "Немає username"
 
-async def random_profile(gender, my_id):
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("""
-        SELECT * FROM profiles
-        WHERE gender=$1 AND user_id!=$2
-        """, gender, my_id)
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🗑 Видалити",
+                        callback_data=f"del_{p['user_id']}"
+                    ),
+                    InlineKeyboardButton(
+                        text="🚫 Бан",
+                        callback_data=f"ban_{p['user_id']}"
+                    )
+                ]
+            ])
 
-        return random.choice(rows) if rows else None
+            text = (
+                f"#{i}\n"
+                f"{p['name']}, {p['age']}\n"
+                f"{p['height']} см\n"
+                f"{p['bio']}\n\n"
+                f"Username: {username_text}"
+            )
 
+            await m.answer_photo(
+                p["photo"],
+                caption=text,
+                reply_markup=kb
+            )
 
-# ---------- ЛАЙКИ ----------
+            await asyncio.sleep(0.1)
 
-async def add_like(from_id, to_id):
-    async with pool.acquire() as conn:
-        await conn.execute("""
-        INSERT INTO likes VALUES ($1,$2)
-        ON CONFLICT DO NOTHING
-        """, from_id, to_id)
+    # ---------- ВИДАЛЕННЯ ----------
+    @dp.callback_query(F.data.startswith("del_"))
+    async def delete_start(c: CallbackQuery, state: FSMContext):
+        uid = int(c.data.split("_")[1])
+        await state.update_data(target=uid, action="delete")
+        await c.message.answer("✍ Напиши причину видалення:")
+        await state.set_state(AdminForm.comment)
+        await c.answer()
 
+    # ---------- БАН ----------
+    @dp.callback_query(F.data.startswith("ban_"))
+    async def ban_start(c: CallbackQuery, state: FSMContext):
+        uid = int(c.data.split("_")[1])
+        await state.update_data(target=uid, action="ban")
+        await c.message.answer("✍ Напиши причину бану:")
+        await state.set_state(AdminForm.comment)
+        await c.answer()
 
-async def is_mutual(a, b):
-    async with pool.acquire() as conn:
-        r = await conn.fetchrow("""
-        SELECT 1 FROM likes
-        WHERE from_id=$1 AND to_id=$2
-        """, b, a)
+    # ---------- ОБРОБКА КОМЕНТАРЯ ----------
+    @dp.message(AdminForm.comment)
+    async def finish(m: Message, state: FSMContext):
+        if not is_admin(m.from_user):
+            return
 
-        return r is not None
+        data = await state.get_data()
+        uid = data["target"]
+        action = data["action"]
+        reason = m.text
 
+        if action == "delete":
+            await delete_profile(uid)
 
-# ---------- КІЛЬКІСТЬ МАТЧІВ ----------
+            try:
+                await m.bot.send_message(
+                    uid,
+                    f"❌ Твою анкету видалено.\nПричина:\n{reason}"
+                )
+            except:
+                pass
 
-async def get_matches_count():
-    async with pool.acquire() as conn:
-        r = await conn.fetchrow("""
-        SELECT COUNT(*) FROM likes l1
-        JOIN likes l2
-        ON l1.from_id = l2.to_id
-        AND l1.to_id = l2.from_id
-        WHERE l1.from_id < l1.to_id
-        """)
-        return r[0] if r else 0
+            await m.answer("✅ Анкету видалено")
 
+        if action == "ban":
+            await delete_profile(uid)
+            await ban_user(uid, reason)
 
-# ---------- БАНИ ----------
+            try:
+                await m.bot.send_message(
+                    uid,
+                    f"🚫 Ти заблокований.\nПричина:\n{reason}"
+                )
+            except:
+                pass
 
-async def ban_user(uid, reason):
-    async with pool.acquire() as conn:
-        await conn.execute("""
-        INSERT INTO bans VALUES ($1,$2)
-        ON CONFLICT (user_id)
-        DO UPDATE SET reason=$2
-        """, uid, reason)
+            await m.answer("🚫 Користувача заблоковано")
 
+        await state.clear()
 
-async def is_banned(uid):
-    async with pool.acquire() as conn:
-        r = await conn.fetchrow(
-            "SELECT 1 FROM bans WHERE user_id=$1",
-            uid
-        )
-        return r is not None
-
-
-async def get_ban_reason(uid):
-    async with pool.acquire() as conn:
-        r = await conn.fetchrow(
-            "SELECT reason FROM bans WHERE user_id=$1",
-            uid
-        )
-        return r["reason"] if r else None
