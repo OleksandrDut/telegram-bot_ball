@@ -10,7 +10,7 @@ from aiogram.fsm.context import FSMContext
 from db import *
 from admin import register_admin_handlers
 
-TOKEN = os.getenv("7709082743:AAGtPsOFAZbZED9OOjrPpQzNdT2_kcZKibE")
+TOKEN = os.getenv("BOT_TOKEN")
 
 logging.basicConfig(level=logging.INFO)
 
