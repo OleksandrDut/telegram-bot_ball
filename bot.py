@@ -12,6 +12,8 @@ from admin import register_admin_handlers
 
 TOKEN = os.getenv("BOT_TOKEN")
 
+bot = Bot(TOKEN)
+
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(TOKEN)
