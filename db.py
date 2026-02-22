@@ -1,6 +1,5 @@
 import asyncpg
 import os
-import random
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 pool = None
@@ -66,7 +65,7 @@ async def get_profile(uid):
 async def get_all_profiles():
     async with pool.acquire() as conn:
         return await conn.fetch(
-            "SELECT * FROM profiles"
+            "SELECT * FROM profiles ORDER BY user_id"
         )
 
 
@@ -88,16 +87,22 @@ async def delete_profile(uid):
         )
 
 
-# ---------- ПОШУК ----------
+# ---------- ПОСЛІДОВНИЙ ПОШУК ----------
 
-async def random_profile(gender, my_id):
+async def get_next_profile(gender, my_id, offset):
     async with pool.acquire() as conn:
-        rows = await conn.fetch("""
-        SELECT * FROM profiles
-        WHERE gender=$1 AND user_id!=$2
-        """, gender, my_id)
-
-        return random.choice(rows) if rows else None
+        return await conn.fetchrow("""
+        SELECT *
+        FROM profiles
+        WHERE gender=$1
+        AND user_id != $2
+        AND user_id NOT IN (
+            SELECT to_id FROM likes WHERE from_id=$2
+        )
+        ORDER BY user_id
+        OFFSET $3
+        LIMIT 1
+        """, gender, my_id, offset)
 
 
 # ---------- ЛАЙКИ ----------
