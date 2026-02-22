@@ -12,12 +12,13 @@ from admin import register_admin_handlers
 
 TOKEN = os.getenv("BOT_TOKEN")
 
-bot = Bot(TOKEN)
-
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(TOKEN)
 dp = Dispatcher()
+
+# ---------- ПАМʼЯТЬ ОСТАННЬОЇ АНКЕТИ ----------
+user_last_profile = {}
 
 # ---------- FSM ----------
 
@@ -53,7 +54,11 @@ gender_kb = ReplyKeyboardMarkup(
 
 @dp.message(F.text == "/start")
 async def start(m: Message):
-    await m.answer("Твоя ідеальна пара для балу вже чекає десь поруч! Заповнюй коротку анкету та знаходь партнера, з яким цей вечір стане по-справжньому магічним і незабутнім.", reply_markup=menu)
+    await m.answer(
+        "Твоя ідеальна пара для балу вже чекає десь поруч! "
+        "Заповнюй анкету та знаходь партнера 💫",
+        reply_markup=menu
+    )
 
 # ---------- СТВОРЕННЯ АНКЕТИ ----------
 
@@ -62,6 +67,7 @@ async def create(m: Message, state: FSMContext):
 
     if await is_banned(m.from_user.id):
         return await m.answer("🚫 Ти заблокований.")
+
     await m.answer("Як тебе звати?")
     await state.set_state(Form.name)
 
@@ -125,33 +131,54 @@ async def my(m: Message):
     txt = f"{p[1]}, {p[2]} років\n{p[4]} см\n{p[5]}"
     await m.answer_photo(p[6], caption=txt)
 
-# ---------- ПОШУК ----------
+# ---------- ПОСЛІДОВНИЙ ПОШУК ----------
 
 async def show(m: Message, gender):
-    p = await random_profile(gender, m.from_user.id)
+    user_id = m.chat.id
+
+    last_id = user_last_profile.get(user_id)
+
+    p = await get_next_profile(gender, user_id, last_id)
 
     if not p:
-        return await m.answer("Нікого нема 😢")
+        return  # просто нічого не показуємо
+
+    user_last_profile[user_id] = p["user_id"]
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="👍",
-                                 callback_data=f"like_{p[0]}_{gender}"),
-            InlineKeyboardButton(text="➡️",
-                                 callback_data=f"next_{gender}")
+            InlineKeyboardButton(
+                text="👍",
+                callback_data=f"like_{p['user_id']}_{gender}"
+            ),
+            InlineKeyboardButton(
+                text="➡️",
+                callback_data=f"next_{gender}"
+            )
         ]
     ])
 
-    txt = f"{p[1]}, {p[2]} років\n{p[4]} см\n{p[5]}"
-    await m.answer_photo(p[6], caption=txt, reply_markup=kb)
+    txt = f"{p['name']}, {p['age']} років\n{p['height']} см\n{p['bio']}"
+    await m.answer_photo(p["photo"], caption=txt, reply_markup=kb)
 
 @dp.message(F.text == "Шукаю партнерку")
 async def fg(m: Message):
-    await show(m,"Дівчина")
+    user_last_profile[m.from_user.id] = None
+    await show(m, "Дівчина")
 
 @dp.message(F.text == "Шукаю партнера")
 async def fb(m: Message):
-    await show(m,"Хлопець")
+    user_last_profile[m.from_user.id] = None
+    await show(m, "Хлопець")
+
+# ---------- NEXT ----------
+
+@dp.callback_query(F.data.startswith("next_"))
+async def next_(c: CallbackQuery):
+    gender = c.data.split("_")[1]
+    await c.message.edit_reply_markup(reply_markup=None)
+    await show(c.message, gender)
+    await c.answer()
 
 # ---------- ЛАЙК ----------
 
@@ -167,16 +194,25 @@ async def like(c: CallbackQuery):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="👍 Прийняти",
-                                 callback_data=f"accept_{c.from_user.id}"),
-            InlineKeyboardButton(text="👎",
-                                 callback_data="decline")
+            InlineKeyboardButton(
+                text="👍 Прийняти",
+                callback_data=f"accept_{c.from_user.id}"
+            ),
+            InlineKeyboardButton(
+                text="👎",
+                callback_data="decline"
+            )
         ]
     ])
 
     txt = f"{liker[1]}, {liker[2]} років\n{liker[4]} см\n{liker[5]}"
-    await bot.send_photo(target, liker[6],
-                         caption=txt, reply_markup=kb)
+
+    await bot.send_photo(
+        target,
+        liker[6],
+        caption=txt,
+        reply_markup=kb
+    )
 
     await c.message.edit_reply_markup(reply_markup=None)
     await show(c.message, gender)
@@ -207,35 +243,31 @@ async def send_match(uid1, uid2):
     link1 = f"@{p1[7]}" if p1[7] else f"tg://user?id={uid1}"
     link2 = f"@{p2[7]}" if p2[7] else f"tg://user?id={uid2}"
 
-    await bot.send_photo(uid1, p2[6],
-        caption=f"🎉 У вас МЕТЧ!\nПиши: {link2}")
+    await bot.send_photo(
+        uid1,
+        p2[6],
+        caption=f"🎉 У вас МЕТЧ!\nПиши: {link2}"
+    )
 
-    await bot.send_photo(uid2, p1[6],
-        caption=f"🎉 У вас МЕТЧ!\nПиши: {link1}")
-
-# ---------- NEXT ----------
-
-@dp.callback_query(F.data.startswith("next_"))
-async def next_(c: CallbackQuery):
-    gender = c.data.split("_")[1]
-    await c.message.edit_reply_markup(reply_markup=None)
-    await show(c.message, gender)
-    await c.answer()
+    await bot.send_photo(
+        uid2,
+        p1[6],
+        caption=f"🎉 У вас МЕТЧ!\nПиши: {link1}"
+    )
 
 # ---------- DELETE ----------
 
 @dp.message(F.text == "Видалити анкету")
 async def delp(m: Message):
     await delete_profile(m.from_user.id)
+    user_last_profile.pop(m.from_user.id, None)
     await m.answer("Анкету видалено")
 
 # ---------- MAIN ----------
 
 async def main():
     await init_db()
-
-    register_admin_handlers(dp)  # ПІДКЛЮЧАЄМО АДМІНКУ
-
+    register_admin_handlers(dp)
     print("✅ BOT STARTED")
     await dp.start_polling(bot)
 
