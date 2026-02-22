@@ -89,20 +89,47 @@ async def delete_profile(uid):
 
 # ---------- ПОСЛІДОВНИЙ ПОШУК ----------
 
-async def get_next_profile(gender, my_id, offset):
+
+async def get_next_profile(gender, my_id, last_id=None):
     async with pool.acquire() as conn:
-        return await conn.fetchrow("""
-        SELECT *
-        FROM profiles
-        WHERE gender=$1
-        AND user_id != $2
-        AND user_id NOT IN (
-            SELECT to_id FROM likes WHERE from_id=$2
-        )
-        ORDER BY user_id
-        OFFSET $3
-        LIMIT 1
-        """, gender, my_id, offset)
+
+        # 1️⃣ якщо перший запуск — беремо першу анкету
+        if last_id is None:
+            profile = await conn.fetchrow("""
+                SELECT *
+                FROM profiles
+                WHERE gender=$1
+                AND user_id != $2
+                ORDER BY user_id
+                LIMIT 1
+            """, gender, my_id)
+
+            return profile
+
+        # 2️⃣ шукаємо наступну після last_id
+        profile = await conn.fetchrow("""
+            SELECT *
+            FROM profiles
+            WHERE gender=$1
+            AND user_id != $2
+            AND user_id > $3
+            ORDER BY user_id
+            LIMIT 1
+        """, gender, my_id, last_id)
+
+        # 3️⃣ якщо дійшли до кінця — запускаємо з початку
+        if not profile:
+            profile = await conn.fetchrow("""
+                SELECT *
+                FROM profiles
+                WHERE gender=$1
+                AND user_id != $2
+                ORDER BY user_id
+                LIMIT 1
+            """, gender, my_id)
+
+        return profile
+
 
 
 # ---------- ЛАЙКИ ----------
