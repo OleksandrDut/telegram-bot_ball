@@ -141,7 +141,7 @@ async def show(m: Message, gender):
     p = await get_next_profile(gender, user_id, last_id)
 
     if not p:
-        return  # просто нічого не показуємо
+        return await m.answer("Анкет ще немає 😢")
 
     user_last_profile[user_id] = p["user_id"]
 
